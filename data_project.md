@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-**InSquare** is a full-stack web application that enables users to generate AI-powered social media content calendars. Users input their brand strategy (brand name, industry, audience, goals, tone, themes), and the app generates a complete content calendar with scheduled posts across multiple social platforms — **LinkedIn**, **Twitter/X**, **Instagram**, and **Facebook**.
+**InSquare** is a full-stack web application that enables users to generate AI-powered social media content calendars and repurpose existing web content (articles, YouTube videos) into platform-optimized social media posts. Users input their brand strategy (brand name, industry, audience, goals, tone, themes), and the app generates a complete content calendar with scheduled posts across multiple social platforms — **LinkedIn**, **Twitter/X**, **Instagram**, and **Facebook**. Additionally, users can paste any URL (webpage or YouTube video) to extract, analyze, and repurpose the content into social media formats like posts, carousels, threads, and video scripts.
 
-The application features user authentication, calendar management, history tracking, post editing/regeneration, hashtag generation, and multi-provider AI failover architecture.
+The application features user authentication, calendar management, URL-to-content repurposing, history tracking, post editing/regeneration, hashtag generation, favorites, and multi-provider AI failover architecture.
 
 ---
 
@@ -28,14 +28,15 @@ The application features user authentication, calendar management, history track
 ├── README.md
 ├── backend/
 │   ├── .env                          # Environment variables (API keys, config)
-│   ├── server.py                     # Main FastAPI application (817 lines)
+│   ├── server.py                     # Main FastAPI application (1066 lines)
 │   ├── ai_gateway.py                 # Multi-provider AI failover module
 │   ├── auth_middleware.py            # Firebase token verification middleware
 │   ├── firebase_config.py           # Firebase Admin SDK initialization
-│   ├── firestore_service.py         # Firestore CRUD operations
+│   ├── firestore_service.py         # Firestore CRUD for calendars & profiles
+│   ├── url_content_service.py       # Firestore CRUD for URL generations
+│   ├── content_extractor.py         # URL content extraction (YouTube + webpages)
 │   ├── tester_api.py                # API testing utility
-│   ├── firebase-service-account.json # Firebase service account credentials
-│   ├── requirements.txt             # Python dependencies (124 packages)
+│   ├── requirements.txt             # Python dependencies
 │   └── venv/                        # Python virtual environment
 │
 └── frontend/
@@ -60,13 +61,15 @@ The application features user authentication, calendar management, history track
         │   ├── axiosConfig.js        # Axios instance with auth headers
         │   └── utils.js              # Utility functions (cn helper)
         ├── components/
-        │   ├── Navbar.js             # Navigation bar
+        │   ├── Navbar.js             # Navigation bar (Dashboard, URL Repurpose, History, Profile)
         │   ├── ProtectedRoute.js     # Route guard (redirects unauthenticated)
-        │   └── ui/                   # 46 Radix UI (shadcn/ui) components
+        │   └── ui/                   # 48 Radix UI (shadcn/ui) components
         └── pages/
             ├── Dashboard.js          # Main dashboard — strategy form & calendar grid
             ├── CalendarView.js       # Detailed view of a single calendar
-            ├── HistoryPage.js        # Paginated calendar history
+            ├── HistoryPage.js        # Paginated calendar history with favorites
+            ├── UrlGeneratorPage.js   # URL Content Repurposing — multi-step wizard
+            ├── UrlGenerationView.js  # Detailed view of a single URL generation
             ├── LoginPage.js          # Login form (email + Google)
             ├── RegisterPage.js       # Registration form
             └── ProfilePage.js        # User profile & stats
@@ -82,9 +85,11 @@ The application features user authentication, calendar management, history track
 │                                                                      │
 │  LoginPage ─► AuthContext ─► ProtectedRoute ─► Dashboard             │
 │                                                  │                   │
-│                              CalendarView ◄──────┤                   │
-│                              HistoryPage  ◄──────┤                   │
-│                              ProfilePage  ◄──────┘                   │
+│                              CalendarView    ◄───┤                   │
+│                              HistoryPage     ◄───┤                   │
+│                              UrlGeneratorPage◄───┤                   │
+│                              UrlGenerationView◄──┤                   │
+│                              ProfilePage     ◄───┘                   │
 │                                                                      │
 │  Axios (axiosConfig.js) ── attaches Firebase ID Token to all reqs    │
 └───────────────────────────────┬──────────────────────────────────────┘
@@ -96,13 +101,16 @@ The application features user authentication, calendar management, history track
 │  auth_middleware.py ── Verifies Firebase ID Token on every request    │
 │                                                                      │
 │  server.py ─┬─ Auth Endpoints (/api/auth/*)                          │
-│             ├─ Calendar Endpoints (/api/calendars/*)                  │
+│             ├─ Calendar Endpoints (/api/strategy, /api/calendar/*)    │
 │             ├─ History Endpoint (/api/history)                        │
-│             ├─ Post Modification Endpoints (/api/posts/*)             │
-│             └─ Platform Config Endpoints (/api/content-types/*)      │
+│             ├─ Post Modification Endpoints (/api/regenerate, etc.)    │
+│             ├─ Platform Config (/api/content-types/*, etc.)           │
+│             └─ URL Repurposing Endpoints (/api/url/*)                 │
 │                                                                      │
 │  ai_gateway.py ── Multi-provider failover (Gemini → OpenAI → ...)    │
-│  firestore_service.py ── All Firestore CRUD operations               │
+│  content_extractor.py ── YouTube transcript + webpage scraping        │
+│  firestore_service.py ── Calendar & profile CRUD                     │
+│  url_content_service.py ── URL generation CRUD                       │
 └────────────────┬─────────────────────────┬───────────────────────────┘
                  │                         │
                  ▼                         ▼
@@ -111,12 +119,13 @@ The application features user authentication, calendar management, history track
 │                         │   │                                          │
 │  ① Gemini (key rotation)│   │  users/{uid}                            │
 │  ② OpenAI              │   │    ├── profile data                      │
-│  ③ Grok (xAI)          │   │    └── calendars/{cal_id}                │
-│  ④ OpenRouter          │   │         ├── strategy                     │
-│                         │   │         ├── pillars[]                    │
-│  Two-level failover:    │   │         └── posts[]                     │
-│  L1: Gemini key rotation│   │                                          │
-│  L2: Provider fallback  │   │  Firebase Auth (email/Google OAuth)      │
+│  ③ Grok (xAI)          │   │    ├── calendars/{cal_id}                │
+│  ④ OpenRouter          │   │    │    ├── strategy, pillars[], posts[]  │
+│                         │   │    └── url_generations/{gen_id}          │
+│  Two-level failover:    │   │         ├── source_url, analysis         │
+│  L1: Gemini key rotation│   │         └── final_output, platform       │
+│  L2: Provider fallback  │   │                                          │
+│                         │   │  Firebase Auth (email/Google OAuth)      │
 └────────────────────────┘   └─────────────────────────────────────────┘
 ```
 
@@ -132,15 +141,15 @@ The application features user authentication, calendar management, history track
 | GET    | `/api/auth/me`      | Get current user's full profile with usage stats |
 | PATCH  | `/api/auth/me`      | Update profile fields (name, picture)           |
 
-### Calendar Endpoints (`/api/calendars/`)
+### Calendar Endpoints
 
 | Method | Endpoint                          | Description                                        |
 | ------ | --------------------------------- | -------------------------------------------------- |
-| POST   | `/api/calendars/`                 | Generate a new content calendar from strategy input |
-| GET    | `/api/calendars/`                 | Get all calendars for authenticated user            |
-| GET    | `/api/calendars/{calendar_id}`    | Get a specific calendar                            |
-| DELETE | `/api/calendars/{calendar_id}`    | Delete a calendar                                  |
-| POST   | `/api/calendars/{id}/favorite`    | Toggle favorite status                             |
+| POST   | `/api/strategy`                   | Generate a new content calendar from strategy input |
+| GET    | `/api/calendars`                  | Get all calendars for authenticated user            |
+| GET    | `/api/calendar/{calendar_id}`     | Get a specific calendar                            |
+| DELETE | `/api/calendar/{calendar_id}`     | Delete a calendar                                  |
+| POST   | `/api/calendar/{id}/favorite`     | Toggle favorite status                             |
 
 ### History Endpoint
 
@@ -152,11 +161,11 @@ The application features user authentication, calendar management, history track
 
 | Method | Endpoint                     | Description                                         |
 | ------ | ---------------------------- | --------------------------------------------------- |
-| POST   | `/api/posts/regenerate`      | Regenerate a single post's content using AI         |
-| POST   | `/api/posts/update-type`     | Change a post's content type                        |
-| PUT    | `/api/posts/update-content`  | Update post content (inline editing)                |
-| PUT    | `/api/posts/update-status`   | Update post status (draft/scheduled/published)      |
-| POST   | `/api/posts/hashtags`        | Generate hashtags, CTA, and emoji suggestions via AI |
+| POST   | `/api/regenerate`            | Regenerate a single post's content using AI         |
+| POST   | `/api/update-content-type`   | Change a post's content type                        |
+| POST   | `/api/update-post-content`   | Update post content (inline editing)                |
+| POST   | `/api/update-post-status`    | Update post status (draft/scheduled/published)      |
+| POST   | `/api/generate-hashtags`     | Generate hashtags, CTA, and emoji suggestions via AI |
 
 ### Platform Configuration Endpoints
 
@@ -165,6 +174,17 @@ The application features user authentication, calendar management, history track
 | GET    | `/api/content-types/{platform}` | Get available content types          |
 | GET    | `/api/platform-limits`          | Get character limits per platform    |
 | GET    | `/api/content-lengths`          | Get content length presets           |
+
+### URL Content Repurposing Endpoints (`/api/url/`)
+
+| Method | Endpoint                              | Description                                                 |
+| ------ | ------------------------------------- | ----------------------------------------------------------- |
+| POST   | `/api/url/analyze`                    | Extract content from a URL (YouTube/webpage) and AI-analyze |
+| POST   | `/api/url/generate`                   | Generate platform-optimized content from analyzed URL       |
+| GET    | `/api/url/history`                    | Get all URL generations for the user (newest first)         |
+| GET    | `/api/url/generation/{generation_id}` | Get a single URL generation by ID                           |
+| DELETE | `/api/url/{generation_id}`            | Delete a URL generation                                     |
+| POST   | `/api/url/{generation_id}/favorite`   | Toggle favorite status on a URL generation                  |
 
 ---
 
@@ -202,30 +222,65 @@ A complete generated calendar:
 - `created_at` — Timestamp
 - `is_favorite` — Boolean
 
+### UrlAnalyzeRequest
+Input for URL analysis (Step 1):
+- `url` — URL to extract and analyze
+
+### UrlGenerateRequest
+Input for URL content generation (Step 2):
+- `source_url` — Original URL
+- `url_type` — "youtube" or "webpage"
+- `extracted_summary` — AI-generated summary from analysis step
+- `analysis` — Full analysis object (key_points, suggested_formats, etc.)
+- `target_audience` — Who the content targets
+- `goal` — engagement / awareness / leads
+- `platform` — LinkedIn / Twitter / Instagram / Facebook
+- `format` — post / carousel / thread / video_script
+- `tone` — professional / friendly / casual / inspirational / humorous
+
+### UrlGeneration (Firestore document)
+A saved URL content generation result:
+- `id` — UUID
+- `source_url`, `url_type`, `extracted_summary`, `analysis`
+- `platform`, `format`, `tone`, `target_audience`, `goal`
+- `final_output` — Format-specific structured output (e.g., hook/body/cta/hashtags)
+- `created_at` — Timestamp
+- `is_favorite` — Boolean
+- `owner_uid` — User ID
+
 ---
 
 ## Key Features
 
-### 1. AI Content Generation
+### 1. AI Content Generation (Calendar)
 - Generates platform-specific social media posts using AI
 - Supports 4 platforms: LinkedIn, Twitter/X, Instagram, Facebook
 - Multiple content types per platform (tweet, thread, carousel, reel, article, etc.)
 - Configurable content length (short/medium/long) with character limits
 - Content pillars auto-generated based on brand strategy
 
-### 2. Multi-Provider AI Failover
+### 2. URL Content Repurposing
+- **Step 1 — Analyze**: Paste any URL (YouTube video or webpage) to extract and AI-analyze the content
+  - YouTube: Extracts transcript via `youtube-transcript-api`
+  - Webpages: Scrapes readable content via `requests` + `BeautifulSoup`
+  - AI generates: summary, main topic, key points, suggested formats, creative angles
+- **Step 2 — Configure**: Choose target platform, format, tone, audience, and goal
+- **Step 3 — Generate**: AI creates format-specific structured output (post, carousel, thread, or video script)
+- Saved to Firestore with full history, favorites, copy, and delete support
+
+### 3. Multi-Provider AI Failover
 - **Level 1**: Gemini API key rotation (multiple keys, shuffled per request)
 - **Level 2**: Provider fallback chain (Gemini → OpenAI → Grok → OpenRouter)
 - Configurable provider order via `AI_PROVIDERS` environment variable
 - 30-second timeout per provider request
 
-### 3. User Authentication
+### 4. User Authentication
 - Firebase Authentication with Email/Password and Google OAuth
 - JWT token verification on every API request
 - Auto-profile creation on first login
 - Protected routes on the frontend
 
-### 4. Calendar Management
+### 5. Calendar Management
 - Create, view, delete, and favorite calendars
 - Toggle post status (draft → scheduled → published)
 - Inline content editing
@@ -233,13 +288,12 @@ A complete generated calendar:
 - Content type switching per post
 - AI-generated hashtags, CTAs, and emoji suggestions
 
-### 5. History & Analytics
-- Paginated calendar history
-- Sorting: newest, oldest, most posts
-- Filtering: all or favorites only
+### 6. History & Analytics
+- Paginated calendar history with sorting and favorites filtering
+- URL generation history with per-item view, copy, and delete
 - User profile stats: total calendars, total posts, favorites count
 
-### 6. Export Capabilities
+### 7. Export Capabilities
 - PDF export (via jsPDF + jspdf-autotable)
 - Excel export (via xlsx library)
 
@@ -259,15 +313,31 @@ Firestore Root
         ├── total_calendars: number
         ├── total_posts: number
         ├── favorites_count: number
-        └── calendars (subcollection)
-            └── {calendar_id} (document)
+        ├── calendars (subcollection)
+        │   └── {calendar_id} (document)
+        │       ├── id: string
+        │       ├── owner_uid: string
+        │       ├── is_favorite: boolean
+        │       ├── created_at: ISO timestamp
+        │       ├── strategy: { brand_name, industry, ... }
+        │       ├── pillars: [ { title, description, platforms } ]
+        │       └── posts: [ { id, platform, content, pillar, date, status, content_type } ]
+        └── url_generations (subcollection)
+            └── {generation_id} (document)
                 ├── id: string
                 ├── owner_uid: string
+                ├── source_url: string
+                ├── url_type: "youtube" | "webpage"
+                ├── extracted_summary: string
+                ├── analysis: { summary, main_topic, key_points[], suggested_formats[], suggested_angles[] }
+                ├── platform: string
+                ├── format: string
+                ├── tone: string
+                ├── target_audience: string
+                ├── goal: string
+                ├── final_output: { ... }  (format-specific structured content)
                 ├── is_favorite: boolean
-                ├── created_at: ISO timestamp
-                ├── strategy: { brand_name, industry, ... }
-                ├── pillars: [ { title, description, platforms } ]
-                └── posts: [ { id, platform, content, pillar, date, status, content_type } ]
+                └── created_at: ISO timestamp
 ```
 
 ---
@@ -280,6 +350,15 @@ Firestore Root
 | **Twitter/X** | tweet, thread, poll                      |
 | **Instagram** | post, reel, carousel, story              |
 | **Facebook**  | post, video, event, poll                 |
+
+### URL Repurposing Output Formats
+
+| Format         | Output Structure                                                       |
+| -------------- | ---------------------------------------------------------------------- |
+| **post**       | hook, body, cta, hashtags                                              |
+| **carousel**   | slides[] (3–5 slide texts), caption, hashtags                          |
+| **thread**     | tweets[] (4–6 tweets, each ≤ 280 chars), hashtags                      |
+| **video_script** | hook (first 3 seconds), talking_points[], closing_cta                |
 
 ---
 
@@ -322,8 +401,8 @@ npm run start
 
 | Category       | Key Packages                                                      |
 | -------------- | ----------------------------------------------------------------- |
-| **Backend**    | FastAPI, Uvicorn, Pydantic, firebase-admin, google-generativeai, openai, litellm |
-| **Frontend**   | React 19, react-router-dom, axios, framer-motion, firebase, recharts, lucide-react |
-| **UI Library** | Radix UI (46 components), TailwindCSS, class-variance-authority   |
+| **Backend**    | FastAPI, Uvicorn, Pydantic, firebase-admin, google-generativeai, openai, litellm, requests, beautifulsoup4, youtube-transcript-api |
+| **Frontend**   | React 19, react-router-dom, axios, framer-motion, firebase, recharts, lucide-react, react-icons |
+| **UI Library** | Radix UI (48 components), TailwindCSS, class-variance-authority   |
 | **Export**      | jsPDF, jspdf-autotable, xlsx                                     |
 | **Forms**      | react-hook-form, zod (validation)                                |
